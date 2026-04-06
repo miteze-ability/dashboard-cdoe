@@ -32,6 +32,16 @@ def normalize_text(value: str | None) -> str:
     return " ".join(str(value).replace("\xa0", " ").strip().split())
 
 
+def make_celula(celula: str | None, municipio: str | None) -> str:
+    c = normalize_text(celula)
+    m = normalize_text(municipio)
+    if not c:
+        return ""
+    if m:
+        return f"{c} - {m}"
+    return c
+
+
 def normalize_status(value: str) -> str:
     cleaned = normalize_text(value).upper()
     replacements = {
@@ -153,7 +163,7 @@ def build_dashboard_data() -> Dict[str, object]:
             "estacao": normalize_text(row.get("estacao")),
             "municipio": normalize_text(row.get("municipio")),
             "cdoe": normalize_text(row.get("cdo_name")),
-            "celula": normalize_text(row.get("Celula")),
+            "celula": make_celula(row.get("Celula"), row.get("municipio")),
             "subcausa": normalize_text(row.get("Subcausa")),
             "causa_macro": normalize_text(row.get("Causa Macro")),
             "agrupador": normalize_text(row.get("Agrupador") or row.get("agrupador")),
@@ -169,7 +179,7 @@ def build_dashboard_data() -> Dict[str, object]:
             "estacao": normalize_text(row.get("cd_estacao_sigla_hc")),
             "municipio": normalize_text(row.get("ds_municipio_hp")),
             "cdoe": normalize_text(row.get("ds_nome_cdo_hp")),
-            "celula": normalize_text(row.get("cd_celula_hp")),
+            "celula": make_celula(row.get("cd_celula_hp"), row.get("ds_municipio_hp")),
             "status": normalize_status(row.get("ds_cdo_est_operacional", "")),
             "ptp": normalize_text(row.get("cd_cdo_ptp_name")),
         }
@@ -961,6 +971,8 @@ def dashboard_html(data: Dict[str, object]) -> str:
 
   <script>
     const DATA = {json_data};
+    const cdoeMeta = new Map();
+    DATA.cdoesRows.forEach((row) => cdoeMeta.set(row.cdoe, row));
 
     const estacaoSelect = document.getElementById("estacao");
     const municipioSelect = document.getElementById("municipio");
@@ -1215,10 +1227,14 @@ def dashboard_html(data: Dict[str, object]) -> str:
     function exportOfensoresToExcel() {{
       const grouped = new Map();
       for (const row of latestFalhasRows) {{
+        const meta = cdoeMeta.get(row.cdoe);
+        const resolvedEstacao = row.estacao || (meta?.estacoes[0] || "");
+        const resolvedMunicipio = row.municipio || (meta?.municipios[0] || "");
+        
         const key = [
           row.cdoe || "",
-          row.estacao || "",
-          row.municipio || "",
+          resolvedEstacao,
+          resolvedMunicipio,
           row.celula || "",
           row.subcausa || "",
           row.causa_macro || "",
@@ -1227,8 +1243,8 @@ def dashboard_html(data: Dict[str, object]) -> str:
 
         const current = grouped.get(key) || {{
           cdoe: row.cdoe || "",
-          estacao: row.estacao || "",
-          municipio: row.municipio || "",
+          estacao: resolvedEstacao,
+          municipio: resolvedMunicipio,
           celula: row.celula || "",
           subcausa: row.subcausa || "",
           causa_macro: row.causa_macro || "",
@@ -1320,19 +1336,46 @@ def dashboard_html(data: Dict[str, object]) -> str:
       const estacao = estacaoSelect.value;
       const municipio = municipioSelect.value;
       const causasSelecionadas = selectedCauses();
+      const statusFilter = statusCdoeSelect.value;
       const dataInicio = dataInicioInput.value;
       const dataFim = dataFimInput.value;
 
       return DATA.falhasRows.filter((row) => {{
-        if (estacao !== "TODAS" && row.estacao !== estacao) return false;
-        if (municipio !== "TODOS" && row.municipio !== municipio) return false;
+        const meta = cdoeMeta.get(row.cdoe);
+
+        if (estacao !== "TODAS") {{
+          const estacoes = row.estacao ? [row.estacao] : (meta?.estacoes || []);
+          if (!estacoes.includes(estacao)) return false;
+        }}
+
+        if (municipio !== "TODOS") {{
+          const municipios = row.municipio ? [row.municipio] : (meta?.municipios || []);
+          if (!municipios.includes(municipio)) return false;
+        }}
+
+        if (statusFilter !== "TODAS") {{
+          if (!meta || !statusMatches(meta, statusFilter)) return false;
+        }}
+
         if (!causasSelecionadas.length) return false;
         if (!causasSelecionadas.includes(row.causa_macro)) return false;
+
         if (interactiveSelection.cdoe && row.cdoe !== interactiveSelection.cdoe) return false;
-        if (interactiveSelection.celula && row.celula !== interactiveSelection.celula) return false;
-        if (interactiveSelection.municipio && row.municipio !== interactiveSelection.municipio) return false;
+
+        if (interactiveSelection.celula) {{
+          const cells = row.celula ? [row.celula] : (DATA.cdoeCellMap[row.cdoe] || []);
+          if (!cells.includes(interactiveSelection.celula)) return false;
+        }}
+
+        if (interactiveSelection.municipio) {{
+          const municipiosVal = row.municipio ? [row.municipio] : (meta?.municipios || []);
+          if (!municipiosVal.includes(interactiveSelection.municipio)) return false;
+        }}
+
         if (interactiveSelection.subcausa && row.subcausa !== interactiveSelection.subcausa) return false;
+
         if (!inDateRange(row.data_abertura, dataInicio, dataFim)) return false;
+
         return true;
       }});
     }}
@@ -1387,6 +1430,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
 
       for (const row of rows) {{
         if (row.cdoe) cdoeCounter.set(row.cdoe, (cdoeCounter.get(row.cdoe) || 0) + 1);
+        
         if (row.celula) {{
           celulaCounter.set(row.celula, (celulaCounter.get(row.celula) || 0) + 1);
         }} else if (row.cdoe && DATA.cdoeCellMap[row.cdoe]?.length) {{
@@ -1394,7 +1438,10 @@ def dashboard_html(data: Dict[str, object]) -> str:
             celulaCounter.set(cell, (celulaCounter.get(cell) || 0) + 1);
           }});
         }}
-        if (row.municipio) municipioCounter.set(row.municipio, (municipioCounter.get(row.municipio) || 0) + 1);
+        
+        const fallbackMuns = row.municipio ? [row.municipio] : (cdoeMeta.get(row.cdoe)?.municipios || []);
+        fallbackMuns.forEach(m => municipioCounter.set(m, (municipioCounter.get(m) || 0) + 1));
+        
         if (row.subcausa) subcausaCounter.set(row.subcausa, (subcausaCounter.get(row.subcausa) || 0) + 1);
         if (row.causa_macro) causaCounter.set(row.causa_macro, (causaCounter.get(row.causa_macro) || 0) + 1);
       }}
