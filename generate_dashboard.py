@@ -572,6 +572,58 @@ def dashboard_html(data: Dict[str, object]) -> str:
       display: grid;
       gap: 6px;
     }}
+    .stack-track {{
+      display: flex;
+      width: 100%;
+      height: 14px;
+      background: #e6ebf2;
+      border-radius: 999px;
+      overflow: hidden;
+    }}
+    .stack-segment {{
+      height: 100%;
+    }}
+    .stack-segment.active {{
+      background: linear-gradient(90deg, #175cd3, #5b8def);
+    }}
+    .stack-segment.empty {{
+      background: linear-gradient(90deg, #f97066, #fda29b);
+    }}
+    .stack-legend {{
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }}
+    .stack-legend-item {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      line-height: 1;
+    }}
+    .stack-legend-item .stack-dot {{
+      width: 10px;
+      min-width: 10px;
+      max-width: 10px;
+      height: 10px;
+      min-height: 10px;
+      max-height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+      flex: 0 0 10px;
+      margin: 0;
+      padding: 0;
+      vertical-align: middle;
+    }}
+    .stack-dot.active {{
+      background: #175cd3;
+    }}
+    .stack-dot.empty {{
+      background: #f97066;
+    }}
     .bar-filter-btn {{
       appearance: none;
       background: transparent;
@@ -816,8 +868,15 @@ def dashboard_html(data: Dict[str, object]) -> str:
       </article>
 
       <article class="card panel wide">
-        <h3>Detalhamento dos ofensores</h3>
-        <p>Separado entre CDOEs ofensores, células ofensores e municípios ofensores.</p>
+        <div class="section-toolbar">
+          <div>
+            <h3>Detalhamento dos ofensores</h3>
+            <p>Separado entre CDOEs ofensores, células ofensores e municípios ofensores.</p>
+          </div>
+          <div class="section-actions">
+            <button type="button" class="chip-btn" id="exportOfensoresExcel">Exportar base de ofensores</button>
+          </div>
+        </div>
         <div class="tables">
           <div>
             <table>
@@ -859,9 +918,13 @@ def dashboard_html(data: Dict[str, object]) -> str:
         </div>
         <div class="section-grid">
           <div class="card filter-card">
-            <h3>Top células com mais CDOEs vazias</h3>
-            <p>Volume de CDOEs sem PTP por célula no recorte selecionado.</p>
-            <div id="topCelulasVaziasBars" class="bars"></div>
+            <h3 id="cdoesCellChartTitle">Top células por volume de CDOEs</h3>
+            <p id="cdoesCellChartDescription">Volume de CDOEs por célula no recorte selecionado.</p>
+            <div id="topCelulasCdoesBars" class="bars"></div>
+            <div class="stack-legend">
+              <div class="stack-legend-item"><i class="stack-dot active"></i><span>Ativas</span></div>
+              <div class="stack-legend-item"><i class="stack-dot empty"></i><span>Vazias</span></div>
+            </div>
           </div>
           <div>
           </div>
@@ -909,6 +972,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
     const activeSelectionPanel = document.getElementById("activeSelectionPanel");
     const activeSelectionChips = document.getElementById("activeSelectionChips");
     const exportCdoesExcelButton = document.getElementById("exportCdoesExcel");
+    const exportOfensoresExcelButton = document.getElementById("exportOfensoresExcel");
     const interactiveSelection = {{
       cdoe: null,
       celula: null,
@@ -920,6 +984,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
       vazias: [],
       comServico: [],
     }};
+    let latestFalhasRows = [];
 
     function formatNumber(value) {{
       return new Intl.NumberFormat("pt-BR").format(value || 0);
@@ -934,6 +999,35 @@ def dashboard_html(data: Dict[str, object]) -> str:
         option.textContent = item.label;
         select.appendChild(option);
       }}
+    }}
+
+    function availableMunicipiosForEstacao(estacao) {{
+      if (estacao === "TODAS") {{
+        return DATA.municipios;
+      }}
+
+      const municipios = new Set();
+      DATA.falhasRows.forEach((row) => {{
+        if (row.estacao === estacao && row.municipio) {{
+          municipios.add(row.municipio);
+        }}
+      }});
+      DATA.cdoesRows.forEach((row) => {{
+        if (row.estacoes.includes(estacao)) {{
+          row.municipios.forEach((municipio) => {{
+            if (municipio) municipios.add(municipio);
+          }});
+        }}
+      }});
+
+      return Array.from(municipios).sort((a, b) => a.localeCompare(b));
+    }}
+
+    function refreshMunicipioOptions() {{
+      const currentMunicipio = municipioSelect.value || "TODOS";
+      const municipios = availableMunicipiosForEstacao(estacaoSelect.value);
+      fillSelect(municipioSelect, municipios, {{ value: "TODOS", label: "Todos os municípios" }});
+      municipioSelect.value = municipios.includes(currentMunicipio) ? currentMunicipio : "TODOS";
     }}
 
     function renderCauseMacroOptions() {{
@@ -1118,6 +1212,93 @@ def dashboard_html(data: Dict[str, object]) -> str:
       URL.revokeObjectURL(link.href);
     }}
 
+    function exportOfensoresToExcel() {{
+      const grouped = new Map();
+      for (const row of latestFalhasRows) {{
+        const key = [
+          row.cdoe || "",
+          row.estacao || "",
+          row.municipio || "",
+          row.celula || "",
+          row.subcausa || "",
+          row.causa_macro || "",
+          row.data_abertura || "",
+        ].join("||");
+
+        const current = grouped.get(key) || {{
+          cdoe: row.cdoe || "",
+          estacao: row.estacao || "",
+          municipio: row.municipio || "",
+          celula: row.celula || "",
+          subcausa: row.subcausa || "",
+          causa_macro: row.causa_macro || "",
+          data_abertura: row.data_abertura || "",
+          total: 0,
+        }};
+        current.total += 1;
+        grouped.set(key, current);
+      }}
+
+      const rows = Array.from(grouped.values()).sort((a, b) =>
+        b.total - a.total ||
+        a.cdoe.localeCompare(b.cdoe) ||
+        a.celula.localeCompare(b.celula)
+      );
+
+      const html = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office"
+              xmlns:x="urn:schemas-microsoft-com:office:excel"
+              xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8">
+          <title>Base de Ofensores</title>
+        </head>
+        <body>
+          <h1>Base de CDOEs Ofensoras</h1>
+          <p>Exportação completa respeitando os filtros atuais do dashboard.</p>
+          <table border="1">
+            <thead>
+              <tr>
+                <th>CDOE</th>
+                <th>Estação</th>
+                <th>Município</th>
+                <th>Célula</th>
+                <th>Subcausa</th>
+                <th>Causa Macro</th>
+                <th>Data Abertura</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{(rows.length ? rows : [{{ cdoe: "", estacao: "", municipio: "", celula: "", subcausa: "Sem dados para este filtro", causa_macro: "", data_abertura: "", total: "" }}]).map((row) => `
+                <tr>
+                  <td>${{escapeHtml(row.cdoe)}}</td>
+                  <td>${{escapeHtml(row.estacao)}}</td>
+                  <td>${{escapeHtml(row.municipio)}}</td>
+                  <td>${{escapeHtml(row.celula)}}</td>
+                  <td>${{escapeHtml(row.subcausa)}}</td>
+                  <td>${{escapeHtml(row.causa_macro)}}</td>
+                  <td>${{escapeHtml(row.data_abertura)}}</td>
+                  <td>${{escapeHtml(row.total)}}</td>
+                </tr>
+              `).join("")}}
+            </tbody>
+          </table>
+        </body>
+        </html>
+      `;
+
+      const blob = new Blob([html], {{ type: "application/vnd.ms-excel;charset=utf-8;" }});
+      const link = document.createElement("a");
+      const date = new Date().toISOString().slice(0, 10);
+      link.href = URL.createObjectURL(blob);
+      link.download = `base_cdoes_ofensoras_${{date}}.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    }}
+
     function inDateRange(value, start, end) {{
       if (!value) return true;
       if (start && value < start) return false;
@@ -1173,6 +1354,30 @@ def dashboard_html(data: Dict[str, object]) -> str:
       }});
     }}
 
+    function resolveAllowedCdoes(falhasRowsFiltradas) {{
+      if (interactiveSelection.cdoe) {{
+        return new Set([interactiveSelection.cdoe]);
+      }}
+      if (interactiveSelection.celula) {{
+        return new Set(
+          DATA.cdoesRows
+            .filter((row) => row.celula_ids.includes(interactiveSelection.celula))
+            .map((row) => row.cdoe)
+        );
+      }}
+      if (interactiveSelection.municipio) {{
+        return new Set(
+          DATA.cdoesRows
+            .filter((row) => row.municipios.includes(interactiveSelection.municipio))
+            .map((row) => row.cdoe)
+        );
+      }}
+      if (interactiveSelection.subcausa) {{
+        return new Set(falhasRowsFiltradas.map((row) => row.cdoe).filter(Boolean));
+      }}
+      return null;
+    }}
+
     function summarizeFalhas(rows) {{
       const cdoeCounter = new Map();
       const celulaCounter = new Map();
@@ -1212,19 +1417,32 @@ def dashboard_html(data: Dict[str, object]) -> str:
       }};
     }}
 
-    function summarizeCelulasVazias(rows) {{
+    function summarizeCelulasCdoes(rows) {{
       const cellCounter = new Map();
       for (const row of rows) {{
-        if (!row.is_vazia) continue;
         const cells = row.celula_ids && row.celula_ids.length ? row.celula_ids : ["SEM CÉLULA"];
         for (const cell of cells) {{
-          cellCounter.set(cell, (cellCounter.get(cell) || 0) + 1);
+          const current = cellCounter.get(cell) || {{ nome: cell, ativas: 0, vazias: 0, total: 0 }};
+          if (row.is_ativa) {{
+            current.ativas += 1;
+          }}
+          if (row.is_vazia) {{
+            current.vazias += 1;
+          }}
+          current.total = current.ativas + current.vazias;
+          cellCounter.set(cell, current);
         }}
       }}
-      return Array.from(cellCounter.entries())
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      return Array.from(cellCounter.values())
+        .filter((item) => item.total > 0)
+        .sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome))
         .slice(0, 10)
-        .map(([nome, total]) => ({{ nome, total }}));
+        .map((item) => ({{
+          nome: item.nome,
+          ativas: item.ativas,
+          vazias: item.vazias,
+          total: item.total,
+        }}));
     }}
 
     function summarizeCdoes(rows) {{
@@ -1275,7 +1493,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
         topSubcausasBars: ["#2e90a6", "#6cb6c9"],
         topCelulasBars: ["#4c6fff", "#8aa2ff"],
         topMunicipiosBars: ["#6172f3", "#98a2ff"],
-        topCelulasVaziasBars: ["#d92d20", "#f97066"],
+        topCelulasCdoesBars: ["#175cd3", "#5b8def"],
       }};
       return palettes[containerId] || ["#175cd3", "#5b8def"];
     }}
@@ -1286,7 +1504,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
         topSubcausasBars: "subcausa",
         topCelulasBars: "celula",
         topMunicipiosBars: "municipio",
-        topCelulasVaziasBars: "celula",
+        topCelulasCdoesBars: "celula",
       }};
       return dimensions[containerId] || null;
     }}
@@ -1323,15 +1541,53 @@ def dashboard_html(data: Dict[str, object]) -> str:
       }});
     }}
 
+    function stackedCdoesBars(containerId, items) {{
+      const container = document.getElementById(containerId);
+      if (!items || !items.length) {{
+        container.innerHTML = `<div class="empty">Nenhum dado para esse filtro.</div>`;
+        return;
+      }}
+      const max = Math.max(...items.map((item) => item.total), 1);
+      const activeValue = interactiveSelection.celula;
+      container.innerHTML = items.map((item) => {{
+        const activeWidth = item.total ? (item.ativas / max) * 100 : 0;
+        const emptyWidth = item.total ? (item.vazias / max) * 100 : 0;
+        return `
+          <div class="bar-row">
+            <button type="button" class="bar-filter-btn ${{activeValue === item.nome ? "is-active" : ""}}" data-dimension="celula" data-value="${{item.nome}}">
+              <div class="bar-label">
+                <span>${{item.nome}}</span>
+                <span>${{formatNumber(item.total)}}</span>
+              </div>
+              <div class="stack-track">
+                <div class="stack-segment active" style="width: ${{activeWidth}}%"></div>
+                <div class="stack-segment empty" style="width: ${{emptyWidth}}%"></div>
+              </div>
+            </button>
+          </div>
+        `;
+      }}).join("");
+
+      container.querySelectorAll(".bar-filter-btn").forEach((button) => {{
+        button.addEventListener("click", () => {{
+          toggleInteractiveSelection("celula", button.dataset.value);
+        }});
+      }});
+    }}
+
+
     function render() {{
       const falhasRowsFiltradas = filterFalhas();
+      latestFalhasRows = falhasRowsFiltradas;
       const allowedCdoes = hasInteractiveSelection()
-        ? new Set(falhasRowsFiltradas.map((row) => row.cdoe).filter(Boolean))
+        ? resolveAllowedCdoes(falhasRowsFiltradas)
         : null;
       const falhas = summarizeFalhas(falhasRowsFiltradas);
-      const cdoes = summarizeCdoes(filterCdoes(null, allowedCdoes));
-      const cdoesSecao = summarizeCdoes(filterCdoes(statusCdoeSecaoSelect.value, allowedCdoes));
-      const topCelulasVazias = summarizeCelulasVazias(filterCdoes(statusCdoeSecaoSelect.value, allowedCdoes));
+      const cdoesRowsBase = filterCdoes(null, allowedCdoes);
+      const cdoesRowsSecao = filterCdoes(statusCdoeSecaoSelect.value, allowedCdoes);
+      const cdoes = summarizeCdoes(cdoesRowsBase);
+      const cdoesSecao = summarizeCdoes(cdoesRowsSecao);
+      const topCelulasCdoes = summarizeCelulasCdoes(cdoesRowsSecao);
       latestCdoesSecao = cdoesSecao;
 
       document.getElementById("totalFalhas").textContent = formatNumber(falhas.totalFalhas);
@@ -1347,13 +1603,17 @@ def dashboard_html(data: Dict[str, object]) -> str:
       document.getElementById("notaAtiva").textContent = DATA.notas.ativa;
       document.getElementById("notaVazia").textContent = DATA.notas.vazia;
       document.getElementById("notaComServico").textContent = "CDOE com serviço = possui PTP preenchido, então não está vazia.";
+      document.getElementById("cdoesCellChartTitle").textContent =
+        "Top células por volume de CDOEs";
+      document.getElementById("cdoesCellChartDescription").textContent =
+        "Volume por célula somando Ativas + Vazias. CDOEs com serviço aparecem só no indicador superior.";
       updateInteractiveSelectionPanel();
 
       bars("topCdoesBars", falhas.topCdoes.slice(0, 8));
       bars("topSubcausasBars", falhas.topSubcausas.slice(0, 8));
       bars("topCelulasBars", falhas.topCelulas.slice(0, 8));
       bars("topMunicipiosBars", falhas.topMunicipios.slice(0, 8));
-      bars("topCelulasVaziasBars", topCelulasVazias);
+      stackedCdoesBars("topCelulasCdoesBars", topCelulasCdoes);
 
       document.getElementById("topCdoesTable").innerHTML = rankedTable(falhas.topCdoes);
       document.getElementById("topCelulasTable").innerHTML = rankedTable(falhas.topCelulas);
@@ -1365,7 +1625,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
     }}
 
     fillSelect(estacaoSelect, DATA.estacoes, {{ value: "TODAS", label: "Todas as estações" }});
-    fillSelect(municipioSelect, DATA.municipios, {{ value: "TODOS", label: "Todos os municípios" }});
+    refreshMunicipioOptions();
     fillSelect(statusCdoeSelect, [
       "ATIVAS",
       "VAZIAS",
@@ -1406,8 +1666,12 @@ def dashboard_html(data: Dict[str, object]) -> str:
       render();
     }});
     exportCdoesExcelButton.addEventListener("click", exportSectionToExcel);
+    exportOfensoresExcelButton.addEventListener("click", exportOfensoresToExcel);
 
-    estacaoSelect.addEventListener("change", render);
+    estacaoSelect.addEventListener("change", () => {{
+      refreshMunicipioOptions();
+      render();
+    }});
     municipioSelect.addEventListener("change", render);
     statusCdoeSelect.addEventListener("change", render);
     statusCdoeSecaoSelect.addEventListener("change", render);
