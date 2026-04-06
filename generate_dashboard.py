@@ -631,6 +631,12 @@ def dashboard_html(data: Dict[str, object]) -> str:
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid rgba(255, 255, 255, 0.08);
     }}
+    .section-actions {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
     .section-grid {{
       display: grid;
       grid-template-columns: minmax(320px, 0.9fr) minmax(0, 2.1fr);
@@ -843,9 +849,12 @@ def dashboard_html(data: Dict[str, object]) -> str:
             <span class="pill warn" id="pillVazias">Vazias: 0</span>
             <span class="pill danger" id="pillComServico">Com serviço: 0</span>
           </div>
-          <div class="mini-filter">
-            <label for="statusCdoeSecao">Filtro desta seção</label>
-            <select id="statusCdoeSecao"></select>
+          <div class="section-actions">
+            <div class="mini-filter">
+              <label for="statusCdoeSecao">Filtro desta seção</label>
+              <select id="statusCdoeSecao"></select>
+            </div>
+            <button type="button" class="chip-btn" id="exportCdoesExcel">Exportar Excel</button>
           </div>
         </div>
         <div class="section-grid">
@@ -899,11 +908,17 @@ def dashboard_html(data: Dict[str, object]) -> str:
     const dataFimInput = document.getElementById("dataFim");
     const activeSelectionPanel = document.getElementById("activeSelectionPanel");
     const activeSelectionChips = document.getElementById("activeSelectionChips");
+    const exportCdoesExcelButton = document.getElementById("exportCdoesExcel");
     const interactiveSelection = {{
       cdoe: null,
       celula: null,
       municipio: null,
       subcausa: null,
+    }};
+    let latestCdoesSecao = {{
+      ativas: [],
+      vazias: [],
+      comServico: [],
     }};
 
     function formatNumber(value) {{
@@ -1028,6 +1043,79 @@ def dashboard_html(data: Dict[str, object]) -> str:
     function toggleInteractiveSelection(dimension, value) {{
       interactiveSelection[dimension] = interactiveSelection[dimension] === value ? null : value;
       render();
+    }}
+
+    function escapeHtml(value) {{
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }}
+
+    function exportSectionToExcel() {{
+      const sections = [
+        ["CDOE Ativa", latestCdoesSecao.ativas],
+        ["CDOE Vazia", latestCdoesSecao.vazias],
+        ["CDOE Com Serviço", latestCdoesSecao.comServico],
+      ];
+
+      const tables = sections.map(([title, rows]) => `
+        <h2>${{escapeHtml(title)}}</h2>
+        <table border="1">
+          <thead>
+            <tr>
+              <th>Categoria</th>
+              <th>CDOE</th>
+              <th>Status</th>
+              <th>PTPs</th>
+              <th>Células</th>
+              <th>Estações</th>
+              <th>Municípios</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${{(rows.length ? rows : [{{ cdoe: "", status: "Sem dados para este filtro", ptps: "", celula_ids: [], estacoes: [], municipios: [] }}]).map((row) => `
+              <tr>
+                <td>${{escapeHtml(title)}}</td>
+                <td>${{escapeHtml(row.cdoe)}}</td>
+                <td>${{escapeHtml(row.status)}}</td>
+                <td>${{escapeHtml(row.ptps)}}</td>
+                <td>${{escapeHtml((row.celula_ids || []).join(", "))}}</td>
+                <td>${{escapeHtml((row.estacoes || []).join(", "))}}</td>
+                <td>${{escapeHtml((row.municipios || []).join(", "))}}</td>
+              </tr>
+            `).join("")}}
+          </tbody>
+        </table>
+        <br>
+      `).join("");
+
+      const html = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office"
+              xmlns:x="urn:schemas-microsoft-com:office:excel"
+              xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8">
+          <title>Exportação CDOEs</title>
+        </head>
+        <body>
+          <h1>Detalhamento de CDOEs</h1>
+          <p>Exportado do dashboard com os filtros atuais da seção.</p>
+          ${{tables}}
+        </body>
+        </html>
+      `;
+
+      const blob = new Blob([html], {{ type: "application/vnd.ms-excel;charset=utf-8;" }});
+      const link = document.createElement("a");
+      const date = new Date().toISOString().slice(0, 10);
+      link.href = URL.createObjectURL(blob);
+      link.download = `cdoes_detalhadas_${{date}}.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
     }}
 
     function inDateRange(value, start, end) {{
@@ -1244,6 +1332,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
       const cdoes = summarizeCdoes(filterCdoes(null, allowedCdoes));
       const cdoesSecao = summarizeCdoes(filterCdoes(statusCdoeSecaoSelect.value, allowedCdoes));
       const topCelulasVazias = summarizeCelulasVazias(filterCdoes(statusCdoeSecaoSelect.value, allowedCdoes));
+      latestCdoesSecao = cdoesSecao;
 
       document.getElementById("totalFalhas").textContent = formatNumber(falhas.totalFalhas);
       document.getElementById("cdoesComFalha").textContent = formatNumber(falhas.cdoesComFalha);
@@ -1316,6 +1405,7 @@ def dashboard_html(data: Dict[str, object]) -> str:
       Object.keys(interactiveSelection).forEach((key) => interactiveSelection[key] = null);
       render();
     }});
+    exportCdoesExcelButton.addEventListener("click", exportSectionToExcel);
 
     estacaoSelect.addEventListener("change", render);
     municipioSelect.addEventListener("change", render);
